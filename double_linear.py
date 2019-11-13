@@ -51,15 +51,17 @@ y1[0:nloss] = torch.tensor(np.tile(np.nan, [nloss]))
 y2[20:(nloss + 20)] = torch.tensor(np.tile(np.nan, [nloss]))
 y = torch.stack([y1, y2], 1)
 
-pos = ~torch.isnan(y1)
-pos2 = ~torch.isnan(y2)
+isnan1 = torch.isnan(y[:, 0])
+isnan2 = torch.isnan(y[:, 1])
 
+y1 = y[:, 0]
+y2 = y[:, 1]
 
 class Double_Linear_Model(nn.Module):
     def __init__(self):
         super(Double_Linear_Model, self).__init__()
 
-    def model(self, x1, x2, y):
+    def model(self, x1, x2, isnan1, isnan2, y):
         a = pyro.sample("a", dist.Cauchy(torch.tensor([0., 0.]), torch.tensor(10.)))
         b_1 = pyro.sample("b1", dist.Cauchy(torch.zeros([x1.shape[1], 1]), torch.tensor(2.5)))
         b_2 = pyro.sample("b2", dist.Cauchy(torch.zeros([x2.shape[1], 1]), torch.tensor(2.5)))
@@ -69,17 +71,14 @@ class Double_Linear_Model(nn.Module):
         mean1 = (a[0] + x1.mm(b_1)).squeeze(-1)
         mean2 = (a[1] + x1.mm(b_2)).squeeze(-1) + b_ar*mean1
 
-        y1_impute = pyro.sample('y1_impute', dist.Normal(mean1, sigma))
-        y2_impute = pyro.sample('y2_impute', dist.Normal(mean2, sigma))
-        isnan1 = torch.isnan(y[:, 0])
-        isnan2 = torch.isnan(y[:, 1])
-        y1 = y[:, 0]
-        y2 = y[:, 1]
-        y1[isnan1] = y1_impute[isnan1]  # update x
-        y2[isnan2] = y2_impute[isnan2]  # update x
+        # y1_impute = pyro.sample('y1_impute', dist.Normal(mean1, sigma)).clone().detach()
+        # y2_impute = pyro.sample('y2_impute', dist.Normal(mean2, sigma)).clone().detach()
 
-        pyro.sample("obs1", dist.Normal(mean1, sigma), obs=y1)
-        pyro.sample("obs2", dist.Normal(mean2, sigma2), obs=y2)
+        # y1[isnan1] = y1_impute[isnan1]  # update x
+        # y2[isnan2] = y2_impute[isnan2]  # update x
+
+        pyro.sample("obs1", dist.Normal(mean1[~isnan1], sigma), obs=y[~isnan1, 0])
+        pyro.sample("obs2", dist.Normal(mean2[~isnan2], sigma2), obs=y[~isnan2, 1])
 
         # return [pyro.sample("obs1", dist.Normal(mean1, sigma), obs=y[:, 0]),
         #         pyro.sample("obs2", dist.Normal(mean2, sigma2), obs=y[:, 1])]
@@ -89,8 +88,8 @@ dlr = Double_Linear_Model()
 
 nuts_kernel = NUTS(dlr.model, jit_compile=True)
 mcmc2 = MCMC(nuts_kernel,
-            num_samples=100,
-            warmup_steps=20,
+            num_samples=1000,
+            warmup_steps=200,
             num_chains=1)
-mcmc2.run(x1, x2, y)
+mcmc2.run(x1, x2, isnan1, isnan2, y)
 mcmc2.summary(prob=0.95)
